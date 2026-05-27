@@ -189,7 +189,16 @@ export default function MonitorPage({ settings, update, sessionId, runId, onComp
   if (isPending) { statusLabel = 'Starting'; statusDetail = 'Provisioning compute resources...'; }
   else if (isRunning) { statusLabel = 'Running'; statusDetail = isStaleSession || !session ? 'Notebook is initializing...' : `${Math.round(percent)}% complete`; }
   else if (isComplete) { statusLabel = 'Completed'; statusDetail = 'Pipeline finished successfully.'; }
-  else if (isFailed) { statusLabel = 'Failed'; statusDetail = runInfo?.state_message || 'Pipeline execution failed.'; }
+  else if (isFailed) {
+    statusLabel = 'Failed';
+    const failedTask = runInfo?.tasks?.find((t) => t.result_state === 'FAILED');
+    statusDetail =
+      failedTask?.state_message ||
+      runInfo?.state_message ||
+      (failedTask
+        ? `Task "${failedTask.task_key}" failed${failedTask.notebook_path ? ` (${failedTask.notebook_path})` : ''}.`
+        : 'Pipeline execution failed.');
+  }
   else if (runPhase === PHASE_TERMINATED && runInfo?.result_state === 'SUCCESS' && !session?.completed_on) { statusLabel = 'Finalizing'; statusDetail = 'Run completed, waiting for results...'; }
 
   const elapsed = runInfo?.execution_duration ? formatDuration(runInfo.execution_duration) : null;

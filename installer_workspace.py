@@ -5,7 +5,7 @@
 # MAGIC
 # MAGIC **Run All** — pick **SQL warehouse** then **Inspire catalog** via the widgets (no `%pip`). Uses **Databricks SDK** (preinstalled on DBR / Serverless).
 # MAGIC
-# MAGIC **What it does:** clean install → unpacks **`/Workspace/Users/<you>/InspireAI-workspace.zip`** if present (produced by **`npm run deploy`** / `deploy:inspire`), else uses an existing workspace folder under **`InspireAI`**, **`inspire-ai`**, **`InspireAI-*`**, or **`/Workspace/Shared/InspireAI`** (must contain **`app.yaml`**) → publishes **`dbx_inspire_ai_agent.ipynb`** to **`/Shared/inspire-ai/`** → writes **`app.yaml`** → creates/deploys Databricks App **`inspire-ai`** → grants the app **service principal** full rights on **`{catalog}._inspire`**, **BROWSE** on other catalogs (metadata only), and **CAN_USE** on the warehouse.
+# MAGIC **What it does:** clean install → unpacks **`/Workspace/Users/<you>/InspireAI-workspace.zip`** if present (produced by **`npm run deploy`** / `deploy:inspire`), else uses an existing workspace folder under **`InspireAI`**, **`inspire-ai`**, **`InspireAI-*`**, or **`/Workspace/Shared/InspireAI`** (must contain **`app.yaml`**) → publishes **`dbx_inspire_ai_agent.ipynb`** to **`/Shared/inspire-ai/`** → writes **`app.yaml`** → creates/deploys Databricks App **`inspire-ai`** → grants the app **service principal** full rights on **`{catalog}._inspire`**, **USE_CATALOG** + **BROWSE** on other catalogs (metadata only), and **CAN_USE** on the warehouse.
 # MAGIC
 # MAGIC **Where you use the product:** **Compute → Apps → inspire-ai** (or the link in the last cell) — not this notebook.
 
@@ -18,12 +18,64 @@
 
 # MAGIC %md
 # MAGIC ### SQL warehouse and Unity Catalog
-# MAGIC The next cell creates **two** dropdown widgets (also under **View → Notebook parameters**):
+# MAGIC The next cell shows **two** dropdown widgets immediately (also under **View → Notebook parameters**). The following cell loads workspace choices into those widgets and **stops with an error** until both are set.
 # MAGIC
 # MAGIC 1. **`00_sql_warehouse`** — SQL warehouse used for `CREATE SCHEMA`, SQL grants, and the deployed app’s **`INSPIRE_WAREHOUSE_ID`** default.
 # MAGIC 2. **`01_inspire_catalog`** — catalog where Inspire creates the **`_inspire`** schema (session / tracking tables).
 # MAGIC
+# MAGIC **First run:** widgets appear with **— Please select —** → the setup cell fails → pick both values → **re-run the setup cell** (or Run All).
+# MAGIC
 # MAGIC **Jobs** (`npm run deploy`): set **`WAREHOUSE_OVERRIDE`** (warehouse id) and/or **`CATALOG_OVERRIDE`** in code to skip the matching widget. Values must exist in this workspace.
+
+# COMMAND ----------
+
+# Widgets visible by default (placeholder until setup cell fills choices).
+_WIDGET_PLACEHOLDER = "— Please select —"
+W_WH = "00_sql_warehouse"
+W_CAT = "01_inspire_catalog"
+
+_existing_wh = ""
+_existing_cat = ""
+try:
+    _existing_wh = (dbutils.widgets.get(W_WH) or "").strip()
+except Exception:
+    pass
+try:
+    _existing_cat = (dbutils.widgets.get(W_CAT) or "").strip()
+except Exception:
+    pass
+
+_already_configured = (
+    _existing_wh
+    and _existing_wh != _WIDGET_PLACEHOLDER
+    and _existing_cat
+    and _existing_cat != _WIDGET_PLACEHOLDER
+)
+
+if _already_configured:
+    print("Parameters already set above. Change them if needed, then re-run the setup cell.")
+else:
+    for _w in (W_WH, W_CAT):
+        try:
+            dbutils.widgets.remove(_w)
+        except Exception:
+            pass
+
+    dbutils.widgets.dropdown(
+        W_WH,
+        _WIDGET_PLACEHOLDER,
+        [_WIDGET_PLACEHOLDER],
+        "1) SQL warehouse for grants & app default",
+    )
+    dbutils.widgets.dropdown(
+        W_CAT,
+        _WIDGET_PLACEHOLDER,
+        [_WIDGET_PLACEHOLDER],
+        "2) Unity Catalog for Inspire tracking tables (_inspire)",
+    )
+
+    print("Notebook parameters are ready above (empty until you choose values).")
+    print("Run the next cell to load choices. If it fails, select both dropdowns and re-run that cell.")
 
 # COMMAND ----------
 
@@ -35,6 +87,23 @@ w = WorkspaceClient()
 current_user = w.current_user.me()
 USER_EMAIL = current_user.user_name
 WORKSPACE_HOST = w.config.host
+
+
+def _require_widget_selection(widget_name, picked, valid_values, label_human):
+    """Fail fast when the customer left a parameter widget empty."""
+    value = (picked or "").strip()
+    if not value or value == _WIDGET_PLACEHOLDER:
+        raise ValueError(
+            f"Missing {label_human}: use the **{widget_name}** dropdown above, choose a value, "
+            "then re-run this cell (or Run All from here)."
+        )
+    if value not in valid_values:
+        raise ValueError(
+            f"Invalid {label_human} ({value!r}). Pick a value from the **{widget_name}** dropdown "
+            "and re-run this cell."
+        )
+    return value
+
 
 # --- 1) SQL warehouses (widget: pick one) ---
 WAREHOUSE_OVERRIDE = None  # Set to a warehouse UUID string for Jobs/CI to skip the dropdown
@@ -71,16 +140,25 @@ if WAREHOUSE_OVERRIDE:
             WAREHOUSE_NAME = wh.name or WAREHOUSE_ID
             break
 else:
-    W_WH = "00_sql_warehouse"
-    _def_wh_label = warehouse_labels[0]
+    _prev_wh = (dbutils.widgets.get(W_WH) or "").strip()
     try:
         dbutils.widgets.remove(W_WH)
     except Exception:
         pass
-    dbutils.widgets.dropdown(W_WH, _def_wh_label, warehouse_labels, "1) SQL warehouse for grants & app default")
-    _picked_wh = (dbutils.widgets.get(W_WH) or "").strip() or _def_wh_label
-    if _picked_wh not in warehouse_labels:
-        _picked_wh = warehouse_labels[0]
+    _wh_choices = [_WIDGET_PLACEHOLDER] + warehouse_labels
+    _def_wh_label = _prev_wh if _prev_wh in warehouse_labels else _WIDGET_PLACEHOLDER
+    dbutils.widgets.dropdown(
+        W_WH,
+        _def_wh_label,
+        _wh_choices,
+        "1) SQL warehouse for grants & app default",
+    )
+    _picked_wh = _require_widget_selection(
+        W_WH,
+        dbutils.widgets.get(W_WH),
+        warehouse_labels,
+        "SQL warehouse",
+    )
     _wh_idx = warehouse_labels.index(_picked_wh)
     WAREHOUSE_ID = warehouse_ids_list[_wh_idx]
     WAREHOUSE_NAME = all_warehouses[_wh_idx].name or WAREHOUSE_ID
@@ -99,31 +177,30 @@ available_catalogs = sorted(set(available_catalogs))
 
 CATALOG_OVERRIDE = None  # Set to a catalog name for Jobs/CI to skip the catalog dropdown
 
-_DEFAULT_CATALOG = "workspace" if "workspace" in available_catalogs else available_catalogs[0]
-_WIDGET_CAT = "01_inspire_catalog"
-
 if CATALOG_OVERRIDE:
     if CATALOG_OVERRIDE not in available_catalogs:
         raise ValueError(f"CATALOG_OVERRIDE={CATALOG_OVERRIDE!r} not in catalogs: {available_catalogs}")
     CATALOG = CATALOG_OVERRIDE
 else:
+    _prev_cat = (dbutils.widgets.get(W_CAT) or "").strip()
     try:
-        dbutils.widgets.remove(_WIDGET_CAT)
+        dbutils.widgets.remove(W_CAT)
     except Exception:
         pass
+    _cat_choices = [_WIDGET_PLACEHOLDER] + available_catalogs
+    _def_cat = _prev_cat if _prev_cat in available_catalogs else _WIDGET_PLACEHOLDER
     dbutils.widgets.dropdown(
-        _WIDGET_CAT,
-        _DEFAULT_CATALOG,
-        available_catalogs,
-        "2) Unity Catalog for Inspire tracking tables (__inspire_*)",
+        W_CAT,
+        _def_cat,
+        _cat_choices,
+        "2) Unity Catalog for Inspire tracking tables (_inspire)",
     )
-    _chosen = (dbutils.widgets.get(_WIDGET_CAT) or "").strip()
-    if not _chosen:
-        CATALOG = _DEFAULT_CATALOG
-    elif _chosen not in available_catalogs:
-        raise ValueError(f"Widget {_WIDGET_CAT}={_chosen!r} not in catalogs: {available_catalogs}")
-    else:
-        CATALOG = _chosen
+    CATALOG = _require_widget_selection(
+        W_CAT,
+        dbutils.widgets.get(W_CAT),
+        available_catalogs,
+        "Unity Catalog",
+    )
 
 SCHEMA = "_inspire"
 INSPIRE_DB = f"{CATALOG}.{SCHEMA}"
@@ -477,17 +554,19 @@ if NEW_SP_APP_ID and WAREHOUSE_ID:
         f"GRANT SELECT ON SCHEMA `{CATALOG}`.`{SCHEMA}` TO `{sp}`",
         f"GRANT MODIFY ON SCHEMA `{CATALOG}`.`{SCHEMA}` TO `{sp}`",
     ]
-    # BROWSE on ALL catalogs so the SP can list them in the catalog browser
+    # USE_CATALOG + BROWSE on other catalogs so the SP can read Unity Catalog metadata in the app.
     all_catalogs = set(available_catalogs)
     try:
         for cat in w.catalogs.list():
             all_catalogs.add(cat.name)
     except Exception:
         pass
-    # Other catalogs: BROWSE only (list metadata in the app). No USE_CATALOG — data stays in {CATALOG}._inspire.
+    _skip_catalogs = {"samples", "system", "__databricks_internal", "information_schema"}
     for cat in all_catalogs:
-        if cat not in ("samples", "system", "__databricks_internal", "information_schema"):
-            grants.append(f"GRANT BROWSE ON CATALOG `{cat}` TO `{sp}`")
+        if cat in _skip_catalogs or cat == CATALOG:
+            continue
+        grants.append(f"GRANT USE_CATALOG ON CATALOG `{cat}` TO `{sp}`")
+        grants.append(f"GRANT BROWSE ON CATALOG `{cat}` TO `{sp}`")
 
     for sql in grants:
         try:

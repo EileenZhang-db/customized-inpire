@@ -7,6 +7,8 @@ import {
   TrendingUp, Wallet2, Settings2, Shield, Users, Palette, Lightbulb, Leaf, Lock, Bot,
 } from 'lucide-react';
 import Stepper from './Stepper';
+import DocumentLanguagesMultiselect from './DocumentLanguagesMultiselect';
+import { formatDocumentLanguages, parseDocumentLanguages } from '../constants/documentLanguages';
 
 /* ─── Constants ─── */
 
@@ -66,13 +68,6 @@ const GENERATION_OPTIONS = [
   { value: 'PDF Catalog', label: 'PDF Catalog', icon: FileText, desc: 'Professional PDF documentation' },
   { value: 'Presentation', label: 'Presentation', icon: Presentation, desc: 'Executive-ready PowerPoint slides' },
 ];
-
-const LANGUAGES = [
-  { group: 'Popular', items: ['English', 'French', 'German', 'Spanish', 'Portuguese', 'Arabic', 'Chinese (Mandarin)', 'Japanese'] },
-  { group: 'European', items: ['Italian', 'Dutch', 'Polish', 'Romanian', 'Ukrainian', 'Swedish', 'Danish', 'Norwegian', 'Finnish'] },
-  { group: 'Asian & Other', items: ['Hindi', 'Korean', 'Indonesian', 'Malay', 'Tamil', 'Russian'] },
-];
-const ALL_LANGUAGES = LANGUAGES.flatMap(g => g.items);
 
 const TABLE_ELECTION_OPTIONS = [
   { value: 'Let Inspire Decides', label: 'Let Inspire Decide', desc: 'AI selects the most relevant tables' },
@@ -219,7 +214,7 @@ export default function ConfigForm({ onSubmit, isSubmitting, submitError, disabl
       '08_generation_instructions': form.strategic_goals,
       '09_generation_options': form.generation_options.join(','),
       '11_generation_path': form.generation_path,
-      '12_documents_languages': form.documents_languages.join(','),
+      '12_documents_languages': formatDocumentLanguages(form.documents_languages),
       '13_generate_genie_code_for': form.generate_genie_code_for,
       '14_session_id': finalSessionId,
     };
@@ -562,19 +557,6 @@ function StepEssentials({ form, update, catalogs, catalogsLoading, isValidInspir
    ═══════════════════════════════════════════════════ */
 
 function StepCustomize({ form, update, toggleMulti, showAdvanced, setShowAdvanced }) {
-  const [langSearch, setLangSearch] = useState('');
-
-  const filteredLangs = useMemo(() => {
-    if (!langSearch.trim()) return LANGUAGES;
-    const q = langSearch.toLowerCase();
-    return LANGUAGES
-      .map(g => ({
-        group: g.group,
-        items: g.items.filter(l => l.toLowerCase().includes(q)),
-      }))
-      .filter(g => g.items.length > 0);
-  }, [langSearch]);
-
   return (
     <div className="space-y-5">
       <SectionHeader
@@ -653,51 +635,20 @@ function StepCustomize({ form, update, toggleMulti, showAdvanced, setShowAdvance
         </div>
       </div>
 
-      {/* Languages */}
+      {/* Languages — matches notebook `12_documents_languages` multiselect */}
       <div className="rounded-xl border border-white/10 bg-db-navy/40 p-5">
         <div className="flex items-center justify-between mb-1">
           <label className="text-sm font-medium text-white">Document Languages</label>
           <span className="text-xs text-db-red-light font-medium">{form.documents_languages.length} selected</span>
         </div>
-        <p className="text-xs text-slate-500 mb-3">Choose language(s) for generated documents.</p>
-
-        {/* Search */}
-        <div className="relative mb-3">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-slate-500" />
-          <input
-            type="text"
-            value={langSearch}
-            onChange={(e) => setLangSearch(e.target.value)}
-            placeholder="Search languages..."
-            className="w-full pl-9 pr-4 py-2 rounded-lg bg-db-darkest/60 border border-white/8 text-white placeholder-slate-600 text-xs focus:outline-none focus:ring-1 focus:ring-db-red/30 transition-all"
-          />
-        </div>
-
-        {filteredLangs.map((group) => (
-          <div key={group.group} className="mb-3 last:mb-0">
-            <p className="text-[10px] font-bold text-slate-600 uppercase tracking-wider mb-1.5">{group.group}</p>
-            <div className="flex flex-wrap gap-1.5">
-              {group.items.map((lang) => {
-                const sel = form.documents_languages.includes(lang);
-                return (
-                  <button
-                    key={lang}
-                    type="button"
-                    onClick={() => toggleMulti('documents_languages', lang)}
-                    className={`px-2.5 py-1 rounded-md text-xs font-medium border transition-all duration-150 ${
-                      sel
-                        ? 'bg-db-red/15 text-db-red-light border-db-red/30'
-                        : 'bg-db-darkest/50 text-slate-500 border-white/5 hover:border-white/15 hover:text-slate-300'
-                    }`}
-                  >
-                    {sel && <Check className="w-2.5 h-2.5 inline mr-1 -mt-0.5" />}
-                    {lang}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
+        <p className="text-xs text-slate-500 mb-3">
+          Choose language(s) for PDF and Presentation outputs (widget <span className="font-mono">12_documents_languages</span>).
+        </p>
+        <DocumentLanguagesMultiselect
+          variant="form"
+          value={formatDocumentLanguages(form.documents_languages)}
+          onChange={(v) => update('documents_languages', parseDocumentLanguages(v))}
+        />
       </div>
 
       {/* Business Domains */}

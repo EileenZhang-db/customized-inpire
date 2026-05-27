@@ -12,6 +12,8 @@ const AdmZip = require('adm-zip');
 const crypto = require('crypto');
 const yaml = require('js-yaml');
 const { stripAiDemoDisclaimerHtml, stripDisclaimerDeep } = require('./stripAiDisclaimer');
+const { TEMPLATE_META } = require('./lib/demoDataService');
+const { triggerDemoDataPipeline } = require('./lib/demoDataPipeline');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -194,14 +196,24 @@ function resolveHost(req) {
 async function dbFetch(host, token, apiPath, options = {}) {
   if (!host) throw new Error('Databricks host not configured.');
   const url = `${host}${apiPath}`;
-  const resp = await fetch(url, {
-    ...options,
-    headers: {
-      'Authorization': `Bearer ${token}`,
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
-  });
+  let resp;
+  try {
+    resp = await fetch(url, {
+      ...options,
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+        ...options.headers,
+      },
+    });
+  } catch (e) {
+    const cause = e.cause?.message || e.cause?.code || '';
+    const hint =
+      'Check DATABRICKS_HOST in .env (no trailing slash), VPN/network, and run: npm run verify:databricks';
+    throw new Error(
+      `Cannot reach Databricks at ${host} (${e.message}${cause ? `; ${cause}` : ''}). ${hint}`,
+    );
+  }
   return resp;
 }
 
@@ -1448,6 +1460,45 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+/** Quick workspace reachability check (uses server .env token). */
+app.get('/api/connection-test', async (req, res) => {
+  let host = String(DATABRICKS_HOST || '').replace(/\/+$/, '');
+  if (host && !host.startsWith('http')) host = `https://${host}`;
+  const token = SERVICE_TOKEN;
+  if (!host || !token) {
+    return res.json({
+      ok: false,
+      error: 'Set DATABRICKS_HOST and DATABRICKS_TOKEN in .env',
+    });
+  }
+  try {
+    const whResp = await dbFetch(host, token, '/api/2.0/sql/warehouses');
+    const whJson = await whResp.json();
+    if (!whResp.ok) {
+      return res.json({
+        ok: false,
+        error: whJson.message || `HTTP ${whResp.status}`,
+        hint: 'Regenerate your PAT or check workspace URL',
+      });
+    }
+    const warehouses = whJson.warehouses || [];
+    const configured = DEFAULT_WAREHOUSE_ID;
+    const match = warehouses.find(
+      (w) => w.id === configured || String(w.id).replace(/-/g, '') === String(configured).replace(/-/g, ''),
+    );
+    return res.json({
+      ok: true,
+      warehouse_count: warehouses.length,
+      configured_warehouse_id: configured || null,
+      configured_warehouse_valid: configured ? !!match : null,
+      configured_warehouse_name: match?.name || null,
+      sample_warehouses: warehouses.slice(0, 5).map((w) => ({ id: w.id, name: w.name, state: w.state })),
+    });
+  } catch (e) {
+    return res.json({ ok: false, error: e.message });
+  }
+});
+
 // Pre-configured defaults (injected by the installer notebook via app.yaml env vars)
 app.get('/api/defaults', (req, res) => {
   const host = resolveHost(req);
@@ -1974,6 +2025,98 @@ app.get('/api/dbc/info', (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════
+//  Demo data — "I don't have data" flow
+// ═══════════════════════════════════════════════════
+
+app.get('/api/demo-data/templates', (_req, res) => {
+  res.json({
+    templates: Object.entries(TEMPLATE_META).map(([id, meta]) => ({
+      id,
+      label: meta.label,
+      tables: meta.tables,
+    })),
+  });
+});
+
+/**
+ * Two-step Databricks pipeline: generate demo UC tables → run Inspire discovery.
+ * Body: { description, business_name, inspire_database?, cluster_id?, session_id? }
+ */
+app.post('/api/demo-data/start', requireToken, async (req, res) => {
+  try {
+    const {
+      description = '',
+      business_name = '',
+      inspire_database: bodyInspireDb,
+      cluster_id,
+      session_id: bodySessionId,
+    } = req.body || {};
+
+    const businessName = String(business_name || '').trim();
+    if (!businessName) {
+      return res.status(400).json({ error: 'business_name is required' });
+    }
+    const desc = String(description || '').trim();
+    if (!desc) {
+      return res.status(400).json({ error: 'description is required — describe the data you want to simulate' });
+    }
+
+    const inspireDb = String(bodyInspireDb || DEFAULT_INSPIRE_DB || '').trim();
+    if (!inspireDb || !inspireDb.includes('.')) {
+      return res.status(400).json({ error: 'inspire_database must be catalog._inspire (e.g. mehdi_wissad._inspire)' });
+    }
+    const [catalog] = inspireDb.split('.');
+
+    const sessionId =
+      String(bodySessionId || '').trim() ||
+      `${Date.now()}${Math.floor(Math.random() * 1e6)}`;
+
+    console.log(`\n📦 Demo pipeline (Genie generator → Inspire): tracking ${inspireDb}`);
+
+    const pipelineClusterId =
+      String(cluster_id || process.env.INSPIRE_CLUSTER_ID || process.env.INSPIRE_DEPLOY_CLUSTER_ID || '').trim() ||
+      undefined;
+
+    const pipelineRun = await triggerDemoDataPipeline(
+      dbFetch,
+      databricksJobRunUrl,
+      req.dbHost,
+      req.dbToken,
+      {
+        description: desc,
+        businessName,
+        inspireDatabase: inspireDb,
+        sessionId,
+        cluster_id: pipelineClusterId,
+        ensureInspireNotebookPublished: ensureNotebookPublished,
+        resolveWorkspaceNotebookObjectPath,
+      },
+    );
+
+    res.json({
+      ok: true,
+      session_id: pipelineRun.session_id,
+      pipeline: pipelineRun.pipeline,
+      inspire_run_id: pipelineRun.run_id,
+      inspire_job_id: pipelineRun.job_id,
+      job_run_url: pipelineRun.job_run_url,
+      steps: [
+        { key: 'generate_demo_data', label: 'Generate & store demo data', notebook: pipelineRun.pipeline.step1_notebook },
+        {
+          key: 'inspire_discovery',
+          label: 'Run Inspire discovery',
+          notebook: pipelineRun.pipeline.inspire_agent_notebook,
+        },
+      ],
+    });
+  } catch (err) {
+    const code = err.statusCode && Number.isFinite(err.statusCode) ? err.statusCode : 500;
+    console.error('demo-data/start failed:', err.message);
+    res.status(code).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════════════
 //  Submit notebook run
 // ═══════════════════════════════════════════════════
 
@@ -2007,6 +2150,14 @@ app.get('/api/run/:runId', requireToken, async (req, res) => {
     }
     const data = await response.json();
     const state = data.state || {};
+    const tasks = (data.tasks || []).map((t) => ({
+      task_key: t.task_key,
+      life_cycle_state: t.state?.life_cycle_state || 'UNKNOWN',
+      result_state: t.state?.result_state || null,
+      state_message: t.state?.state_message || '',
+      notebook_path: t.notebook_task?.notebook_path || null,
+      run_id: t.run_id || null,
+    }));
     res.json({
       run_id: data.run_id,
       life_cycle_state: state.life_cycle_state || 'UNKNOWN',
@@ -2019,6 +2170,7 @@ app.get('/api/run/:runId', requireToken, async (req, res) => {
       cleanup_duration: data.cleanup_duration,
       run_page_url: data.run_page_url,
       run_name: data.run_name,
+      tasks,
     });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -2811,10 +2963,26 @@ app.get('/api/inspire/sessions', requireToken, async (req, res) => {
 
     res.json({ sessions });
   } catch (err) {
-    if (err.message.includes('TABLE_OR_VIEW_NOT_FOUND') || err.message.includes('does not exist')) {
-      return res.json({ sessions: [], message: 'Session table not found.' });
+    const msg = err.message || String(err);
+    if (msg.includes('TABLE_OR_VIEW_NOT_FOUND') || msg.includes('does not exist')) {
+      return res.json({ sessions: [], message: 'Session table not found. Run Inspire once to create __inspire_session.' });
     }
-    res.status(500).json({ error: err.message });
+    // Non-fatal: allow "New experiment" when workspace is unreachable or not yet provisioned
+    if (
+      msg.includes('Cannot reach Databricks') ||
+      msg.includes('fetch failed') ||
+      msg.includes('ENOTFOUND') ||
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('ETIMEDOUT')
+    ) {
+      console.warn('[sessions] connection failed:', msg);
+      return res.json({
+        sessions: [],
+        connection_error: msg,
+        message: 'Could not reach Databricks. You can still start a new experiment.',
+      });
+    }
+    res.status(500).json({ error: msg });
   }
 });
 

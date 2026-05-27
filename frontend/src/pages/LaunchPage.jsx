@@ -32,7 +32,10 @@ import {
   Eye,
   Calendar,
   ExternalLink,
+  Sparkles,
 } from 'lucide-react';
+import DocumentLanguagesMultiselect from '../components/DocumentLanguagesMultiselect';
+import { parseDocumentLanguages, formatDocumentLanguages } from '../constants/documentLanguages';
 
 /* ─── Constants — notebook widget `05_use_cases_quality` (Good/High/Very High) ─── */
 const QUALITY_OPTIONS = ['Good Quality', 'High Quality', 'Very High Quality'];
@@ -149,7 +152,7 @@ function ucBrowseQuery(warehouseId) {
   return `?warehouse_id=${encodeURIComponent(warehouseId)}`;
 }
 
-export default function LaunchPage({ settings, update, onLaunched, onOpenResults }) {
+export default function LaunchPage({ settings, update, onLaunched, onOpenResults, onNoData }) {
   const { databricksHost, token, notebookPath, warehouseId, inspireDatabase, serverEnvHasPat } = settings;
   const canUseUcApi = !!(databricksHost && (token || serverEnvHasPat));
 
@@ -535,9 +538,21 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
     if (!params['01_uc_metadata'])
       return setLaunchError('Select at least one catalog, schema, or table for UC Metadata.');
 
+    const genOpts = params['09_generation_options'] || '';
+    const needsDocLang =
+      genOpts.includes('PDF') || genOpts.includes('Presentation');
+    if (needsDocLang && parseDocumentLanguages(params['12_documents_languages']).length === 0) {
+      return setLaunchError(
+        'Select at least one document language (Advanced → Document Languages) for PDF or Presentation.',
+      );
+    }
+
     setLaunching(true);
     setLaunchError('');
     const finalParams = { ...params };
+    finalParams['12_documents_languages'] = formatDocumentLanguages(
+      params['12_documents_languages'],
+    );
     // Always auto-generate session ID
     finalParams['14_session_id'] =
       String(Date.now()) + String(Math.floor(Math.random() * 1e6));
@@ -570,7 +585,13 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
   const filteredTables = tables.filter(
     (t) => !tableSearch || t.full_name.toLowerCase().includes(tableSearch.toLowerCase())
   );
-  const needsLanguage = params['09_generation_options'].includes('PDF') || params['09_generation_options'].includes('Presentation');
+  const needsLanguage =
+    params['09_generation_options'].includes('PDF') ||
+    params['09_generation_options'].includes('Presentation');
+  const selectedDocLanguages = useMemo(
+    () => parseDocumentLanguages(params['12_documents_languages']),
+    [params['12_documents_languages']],
+  );
 
   // Table select all / deselect all
   const allTablesSelected = filteredTables.length > 0 && filteredTables.every((t) => selectedTables.includes(t.full_name));
@@ -859,6 +880,16 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
 
             {/* UC Metadata — Catalog/Schema/Table pickers with shopping basket */}
             <Field label="Unity Catalog Metadata" required icon={Database} hint="Navigate catalogs and schemas to select tables">
+                {onNoData && (
+                  <button
+                    type="button"
+                    onClick={onNoData}
+                    className="mb-3 w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-dashed border-border text-sm text-text-secondary hover:border-db-red/40 hover:text-db-red hover:bg-db-red-50/30 transition-smooth"
+                  >
+                    <Sparkles size={16} />
+                    I don&apos;t have data — generate demo tables instead
+                  </button>
+                )}
                 {/* Selected Metadata Basket — always visible */}
                 {(selectedCatalogs.length > 0 || selectedSchemas.length > 0 || selectedTables.length > 0) && (
                   <div className="mb-3 rounded-lg border border-db-red/20 bg-db-red-50/50 p-3">
@@ -1191,14 +1222,26 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
                   />
                 </Field>
 
-                <Field label="Document Languages" required={needsLanguage} icon={Globe2} hint={needsLanguage ? 'Required for PDF/Presentation' : 'Comma-separated'}>
-                  <input
-                    type="text"
-                    placeholder="English, French, Arabic"
+                <Field
+                  label="Document Languages"
+                  required={needsLanguage}
+                  icon={Globe2}
+                  hint={
+                    needsLanguage
+                      ? 'Required for PDF/Presentation · matches notebook widget 12_documents_languages'
+                      : 'Optional unless PDF or Presentation is selected'
+                  }
+                >
+                  <DocumentLanguagesMultiselect
+                    variant="launch"
                     value={params['12_documents_languages']}
-                    onChange={(e) => updateParam('12_documents_languages', e.target.value)}
-                    className="w-full pl-10 pr-4 py-2.5 text-sm border border-border rounded-lg bg-surface text-text-primary placeholder:text-text-tertiary glow-focus transition-smooth"
+                    onChange={(v) => updateParam('12_documents_languages', v)}
                   />
+                  {needsLanguage && selectedDocLanguages.length === 0 && (
+                    <p className="text-[11px] text-db-red mt-2 font-medium">
+                      Select at least one language before launching.
+                    </p>
+                  )}
                 </Field>
               </div>
 

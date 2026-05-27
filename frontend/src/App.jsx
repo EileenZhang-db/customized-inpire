@@ -4,6 +4,7 @@ import Header from './components/Header';
 import LandingPage from './pages/LandingPage';
 import SetupWizard from './pages/SetupWizard';
 import LaunchPage from './pages/LaunchPage';
+import GenerateDataPage from './pages/GenerateDataPage';
 import MonitorPage from './pages/MonitorPage';
 import ResultsPage from './pages/ResultsPage';
 import ChoosePage from './pages/ChoosePage';
@@ -294,9 +295,22 @@ export default function App() {
           <ChoosePage
             settings={settings}
             onNewExperiment={() => nav('launch')}
+            onNoData={() => nav('generate-data')}
             onViewResults={(sid) => {
               if (sid) setSessionId(sid);
               nav('results');
+            }}
+          />
+        )}
+
+        {page === 'generate-data' && (
+          <GenerateDataPage
+            settings={settings}
+            onBack={() => nav('choose')}
+            onLaunched={(sid, rid) => {
+              setSessionId(sid);
+              setRunId(rid);
+              nav('monitor');
             }}
           />
         )}
@@ -305,6 +319,7 @@ export default function App() {
           <LaunchPage
             settings={settings}
             update={update}
+            onNoData={() => nav('generate-data')}
             onOpenResults={(sid) => {
               if (sid) setSessionId(sid);
               nav('results');

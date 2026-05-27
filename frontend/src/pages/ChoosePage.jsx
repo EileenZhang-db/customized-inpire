@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
-import { Rocket, BarChart3, Loader2, AlertCircle, Clock, CheckCircle2, ArrowRight, ChevronRight, ChevronDown, ChevronUp, Trash2, Eye, EyeOff, Target, FileText } from 'lucide-react';
+import { Rocket, BarChart3, Loader2, AlertCircle, Clock, CheckCircle2, ArrowRight, ChevronRight, ChevronDown, ChevronUp, Trash2, Eye, EyeOff, Target, FileText, Sparkles } from 'lucide-react';
 import SessionSparkline from '../components/SessionSparkline';
 import MagneticButton from '../components/MagneticButton';
 import { SkeletonCard } from '../components/SkeletonLoader';
@@ -125,7 +125,7 @@ function getListRowOverview(session) {
   return null;
 }
 
-export default function ChoosePage({ settings, onNewExperiment, onViewResults }) {
+export default function ChoosePage({ settings, onNewExperiment, onNoData, onViewResults }) {
   const { token, databricksHost, warehouseId, inspireDatabase } = settings;
   const [loading, setLoading] = useState(true);
   const [sessions, setSessions] = useState([]);
@@ -201,6 +201,9 @@ export default function ChoosePage({ settings, onNewExperiment, onViewResults })
         if (resp.ok) {
           const data = await resp.json();
           setSessions(data.sessions || []);
+          if (data.connection_error || data.message) {
+            setError(data.connection_error || data.message);
+          }
         } else {
           const errText = await resp.text().catch(() => '');
           setError(errText || `Could not load sessions (${resp.status})`);
@@ -212,13 +215,6 @@ export default function ChoosePage({ settings, onNewExperiment, onViewResults })
       }
     })();
   }, [token, databricksHost, warehouseId, inspireDatabase]);
-
-  // Auto-redirect to Get Started (launch) only when configured, load succeeded, and there are no sessions yet
-  useEffect(() => {
-    if (!loading && inspireDatabase && warehouseId && sessions.length === 0 && !error) {
-      onNewExperiment();
-    }
-  }, [loading, sessions, error, onNewExperiment, inspireDatabase, warehouseId]);
 
   if (loading) {
     return (
@@ -238,7 +234,46 @@ export default function ChoosePage({ settings, onNewExperiment, onViewResults })
     );
   }
 
-  if (sessions.length === 0 && !error) return null;
+  if (sessions.length === 0 && !error) {
+    return (
+      <div className="min-h-[calc(100vh-64px)] flex items-start justify-center pt-12 pb-16 px-6">
+        <div className="max-w-lg w-full space-y-6 text-center">
+          <h1 className="text-3xl font-bold tracking-tight">Get started with Inspire AI</h1>
+          <p className="text-sm text-text-secondary">
+            Use your Unity Catalog data, or generate realistic demo tables first.
+          </p>
+          <button
+            type="button"
+            onClick={onNewExperiment}
+            className="group w-full flex items-center gap-4 px-6 py-5 rounded-2xl border border-[#FF3621]/20 bg-gradient-to-r from-[#FF3621]/[0.06] to-transparent hover:from-[#FF3621]/[0.12] text-left transition-all"
+          >
+            <div className="w-12 h-12 rounded-xl bg-[#FF3621]/10 flex items-center justify-center">
+              <Rocket size={22} className="text-[#FF3621]" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-text-primary">I have Unity Catalog data</p>
+              <p className="text-xs text-text-secondary mt-0.5">Pick catalogs, schemas, or tables</p>
+            </div>
+            <ArrowRight size={18} className="text-text-tertiary group-hover:text-[#FF3621]" />
+          </button>
+          <button
+            type="button"
+            onClick={onNoData}
+            className="group w-full flex items-center gap-4 px-6 py-5 rounded-2xl border border-border bg-surface hover:border-border-strong text-left transition-all"
+          >
+            <div className="w-12 h-12 rounded-xl bg-bg-subtle flex items-center justify-center">
+              <Sparkles size={22} className="text-db-red" />
+            </div>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-text-primary">I don&apos;t have data</p>
+              <p className="text-xs text-text-secondary mt-0.5">Describe your business — we create demo tables and run Inspire</p>
+            </div>
+            <ArrowRight size={18} className="text-text-tertiary" />
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   const completedSessions = sessions.filter(s => s.completed_percent >= 100);
   const completedCount = completedSessions.length;
@@ -295,21 +330,35 @@ export default function ChoosePage({ settings, onNewExperiment, onViewResults })
           )}
         </div>
 
-        {/* ── New Experiment CTA ── */}
-        <button
-          onClick={onNewExperiment}
-          className="group w-full flex items-center gap-5 px-6 py-5 rounded-2xl border border-[#FF3621]/20 bg-gradient-to-r from-[#FF3621]/[0.06] to-transparent hover:from-[#FF3621]/[0.12] hover:border-[#FF3621]/40 transition-all duration-300"
-          style={{ boxShadow: '0 0 40px rgba(255,54,33,0.04)' }}
-        >
-          <div className="flex-shrink-0 w-12 h-12 rounded-xl bg-[#FF3621]/10 flex items-center justify-center group-hover:bg-[#FF3621]/20 transition-colors">
-            <Rocket size={22} className="text-[#FF3621]" />
-          </div>
-          <div className="flex-1 text-left">
-            <p className="text-sm font-semibold text-text-primary">New Experiment</p>
-            <p className="text-xs text-text-secondary mt-0.5">Start a new Inspire AI use case generation</p>
-          </div>
-          <ArrowRight size={18} className="text-text-tertiary group-hover:text-[#FF3621] group-hover:translate-x-1 transition-all" />
-        </button>
+        {/* ── New experiment CTAs ── */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={onNewExperiment}
+            className="group flex items-center gap-4 px-5 py-4 rounded-2xl border border-[#FF3621]/20 bg-gradient-to-r from-[#FF3621]/[0.06] to-transparent hover:from-[#FF3621]/[0.12] text-left transition-all"
+          >
+            <div className="w-10 h-10 rounded-xl bg-[#FF3621]/10 flex items-center justify-center shrink-0">
+              <Rocket size={20} className="text-[#FF3621]" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-text-primary">I have data</p>
+              <p className="text-[11px] text-text-secondary mt-0.5 truncate">Unity Catalog</p>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={onNoData}
+            className="group flex items-center gap-4 px-5 py-4 rounded-2xl border border-border bg-surface hover:border-border-strong text-left transition-all"
+          >
+            <div className="w-10 h-10 rounded-xl bg-bg-subtle flex items-center justify-center shrink-0">
+              <Sparkles size={20} className="text-db-red" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-semibold text-text-primary">No data yet</p>
+              <p className="text-[11px] text-text-secondary mt-0.5 truncate">Generate demo tables</p>
+            </div>
+          </button>
+        </div>
 
         {/* ── Previous Experiments ── */}
         <div className="space-y-3">
