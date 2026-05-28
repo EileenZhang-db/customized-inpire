@@ -297,6 +297,43 @@ def api_get(path):
     r.raise_for_status()
     return r.json()
 
+
+def load_publish_content_b64(source_path, export_formats=("JUPYTER", "SOURCE")):
+    """
+    Load notebook bytes as base64 for workspace/import.
+    Workspace paths (DBFS fuse) are not readable with open() — use export API first.
+    """
+    path = str(source_path or "").strip()
+    if not path:
+        return None
+
+    if path.startswith("/Workspace"):
+        export_path = path.replace("/Workspace", "", 1)
+        for fmt in export_formats:
+            try:
+                resp = api(
+                    "GET",
+                    f"/api/2.0/workspace/export?path={requests.utils.quote(export_path)}&format={fmt}",
+                )
+                if resp.status_code == 200:
+                    content = (resp.json() or {}).get("content") or ""
+                    if content:
+                        print(f"  Exported {path} ({fmt}): {len(content)} bytes base64")
+                        return content
+            except Exception as e:
+                print(f"  export note ({fmt}): {e}")
+
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        b64 = base64.b64encode(raw).decode("utf-8")
+        print(f"  Read from disk {path}: {len(b64)} bytes base64")
+        return b64
+    except OSError as e:
+        print(f"  ⚠️ Cannot read {path}: {e}")
+        return None
+
+
 def _yaml_quote(value):
     if value is None:
         return '""'
@@ -392,22 +429,9 @@ if not notebook_source:
 
 print(f"Notebook source: {notebook_source}")
 
-# Export from source location (workspace notebook → base64)
-export_path = notebook_source.replace("/Workspace", "")  # workspace API needs path without /Workspace prefix
-try:
-    resp = api("GET", f"/api/2.0/workspace/export?path={requests.utils.quote(export_path)}&format=JUPYTER")
-    if resp.status_code == 200:
-        b64 = resp.json().get("content", "")
-        print(f"  Exported: {len(b64)} bytes base64")
-    else:
-        # Fallback: read directly if it's a file on disk
-        with open(notebook_source, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
-        print(f"  Read from disk: {len(b64)} bytes base64")
-except Exception:
-    with open(notebook_source, "rb") as f:
-        b64 = base64.b64encode(f.read()).decode("utf-8")
-    print(f"  Read from disk: {len(b64)} bytes base64")
+b64 = load_publish_content_b64(notebook_source, export_formats=("JUPYTER", "SOURCE"))
+if not b64:
+    raise FileNotFoundError(f"Could not export or read notebook: {notebook_source}")
 
 # Publish to /Shared/ where SP has access
 try: api("POST", "/api/2.0/workspace/mkdirs", {"path": f"/Shared/{APP_NAME}"})
@@ -447,29 +471,32 @@ for candidate in [
         break
 
 if generate_source:
-    with open(generate_source, "rb") as f:
-        gen_b64 = base64.b64encode(f.read()).decode("utf-8")
-    try:
-        api("POST", "/api/2.0/workspace/mkdirs", {"path": f"/Shared/{APP_NAME}"})
-    except Exception:
-        pass
-    gen_resp = api(
-        "POST",
-        "/api/2.0/workspace/import",
-        {
-            "path": GENERATE_DEMO_DEST,
-            "format": "SOURCE",
-            "content": gen_b64,
-            "language": "PYTHON",
-            "overwrite": True,
-        },
-    )
-    if gen_resp.status_code in (200, 201):
-        print(f"Published demo generator: ✅ {GENERATE_DEMO_DEST}")
+    print(f"Demo generator source: {generate_source}")
+    gen_b64 = load_publish_content_b64(generate_source, export_formats=("SOURCE", "JUPYTER"))
+    if gen_b64:
+        try:
+            api("POST", "/api/2.0/workspace/mkdirs", {"path": f"/Shared/{APP_NAME}"})
+        except Exception:
+            pass
+        gen_resp = api(
+            "POST",
+            "/api/2.0/workspace/import",
+            {
+                "path": GENERATE_DEMO_DEST,
+                "format": "SOURCE",
+                "content": gen_b64,
+                "language": "PYTHON",
+                "overwrite": True,
+            },
+        )
+        if gen_resp.status_code in (200, 201):
+            print(f"Published demo generator: ✅ {GENERATE_DEMO_DEST}")
+        else:
+            print(f"Demo generator publish: ⚠️ {gen_resp.status_code} {gen_resp.text[:200]}")
     else:
-        print(f"Demo generator publish: ⚠️ {gen_resp.status_code} {gen_resp.text[:200]}")
+        print(f"⚠️ Could not read demo generator from {generate_source}")
 else:
-    print("⚠️ dbx_generate_demo_data.py not found in source — skip demo pipeline notebook publish")
+    print("⚠️ dbx_generate_demo_data not found in source — skip demo pipeline notebook publish")
 
 # COMMAND ----------
 
