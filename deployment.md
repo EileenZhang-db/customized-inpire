@@ -97,7 +97,49 @@ Use this checklist. If any step fails, fix the error shown in the notebook outpu
 
 ---
 
-## 6. Optional: deploy from your laptop (npm run deploy)
+## 6. Selecting Unity Catalog metadata (Launch page)
+
+After the app is deployed, open **inspire-ai** and go to the **Launch** flow. Under **Unity Catalog Metadata**, choose what Inspire should analyze. How you select metadata has a large impact on **run time** and **use-case quality**.
+
+### Recommended approach
+
+| Do | Why |
+|----|-----|
+| Select **individual tables** (not whole catalogs) | Inspire reads table and column metadata only; a focused list runs faster and produces sharper use cases. |
+| Keep the set **small** — ideally **fewer than 25 tables** | Discovery and scoring scale with breadth; large selections take much longer. |
+| Stay in **one business domain** | Example: all **sales** tables together (orders, line items, customers), not sales + HR + finance in one run. |
+| Prefer **transactional** tables | Tables that receive new rows often (e.g. `sales_transactions`, `orders`, `events`) support richer use cases. |
+| Skip or minimize **static** tables | Reference data that rarely changes (e.g. `store_location`, `country_codes`) adds little discovery value. |
+| Use **Generation Instructions** for joins | If Unity Catalog metadata does not show primary/foreign keys between tables, describe relationships there (e.g. *join orders to customers on customer_id*). |
+
+### How to select in the UI
+
+1. Expand **Browse catalogs** under **Unity Catalog Metadata**.
+2. Pick one or more **catalogs**, then **schemas**, then **tables** (table selection is the primary, preferred level).
+3. Selected items appear in the **Selected Metadata** basket. Remove chips you do not need.
+4. Optionally set **Generation Instructions** for domain focus, joins, or exclusions.
+
+Avoid leaving only a **catalog** or **schema** in the basket without naming tables unless you intentionally want Inspire to scan **everything** in that scope.
+
+### In-app warnings
+
+The Launch page shows an amber notice when your selection is likely to run long or produce weaker results:
+
+| Your selection | Warning |
+|----------------|---------|
+| **More than 10 tables** | Many explicit tables — expect a longer run; narrow to transactional tables in one domain if possible. |
+| **Whole schema** (schema in basket, no tables) | All tables in that schema are in scope. Open the table list and pick a focused subset instead. |
+| **Whole catalog** (catalog only) | All schemas and tables in that catalog are in scope. Prefer drilling down to specific schemas and tables. |
+
+These warnings are advisory; you can still launch. For the best outcomes, treat **under 25 transactional tables in one domain** as the target.
+
+### “I don’t have data”
+
+If you have no UC tables yet, use **I don’t have data — generate demo tables instead**. That runs a separate pipeline: an LLM generates demo Delta tables (with Unity Catalog table and column descriptions), then Inspire discovers use cases on those tables. See the in-app flow on that page for details.
+
+---
+
+## 7. Optional: deploy from your laptop (npm run deploy)
 
 If you prefer the CLI to upload the zip and installer and optionally run the notebook as a **Job**:
 
@@ -105,11 +147,11 @@ If you prefer the CLI to upload the zip and installer and optionally run the not
 2. Optionally set **INSPIRE_DEPLOY_CLUSTER_ID** to an **all-purpose** cluster id that is **RUNNING** when you deploy.
 3. Run **npm run deploy** from the repo root.
 
-The script packages the zip, imports it and **installer_workspace.py**, and submits a one-time Job when a cluster id is available. If no **RUNNING** cluster is found, it still uploads assets and prints the notebook path; open that notebook and **Run All** as in sections 3 through 5.
+The script packages the zip, imports it and **installer_workspace.py**, and submits a one-time Job when a cluster id is available. If no **RUNNING** cluster is found, it still uploads assets and prints the notebook path; open that notebook and **Run All** as in sections 3 through 5. For how end users should pick catalogs, schemas, and tables in the app, see **section 6**.
 
 ---
 
-## Permissions (short)
+## 8. Permissions (short)
 
 - **While you run the installer:** your user identity needs warehouse **CAN_USE**, rights to create or use **{catalog}._inspire**, and permissions to create or update the App and workspace paths the notebook touches.
 - **After deployment:** the **App service principal** is what the running app uses. The installer grants:
@@ -121,7 +163,7 @@ If identity resolution fails, follow the SQL hints printed by the notebook.
 
 ---
 
-## Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | What to do |
 |---------|------------|
@@ -133,6 +175,6 @@ If identity resolution fails, follow the SQL hints printed by the notebook.
 
 ---
 
-## Alternative: Git-backed App
+## 10. Alternative: Git-backed App
 
 You can also create an App from this **Git repository** in the Databricks UI (**Compute, Apps, Create from Git**). That path does not use the zip installer; it builds from the repo branch you configure. Use the **zip plus installer_workspace.py** flow above when you need the workspace copy, **app.yaml** patching, and SP grants that the installer performs.

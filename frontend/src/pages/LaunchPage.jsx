@@ -40,6 +40,10 @@ import { parseDocumentLanguages, formatDocumentLanguages } from '../constants/do
 /* ─── Constants — notebook widget `05_use_cases_quality` (Good/High/Very High) ─── */
 const QUALITY_OPTIONS = ['Good Quality', 'High Quality', 'Very High Quality'];
 const TABLE_ELECTION = ['Let Inspire Decides', 'All Tables', 'Transactional Only'];
+/** Show guidance when explicit table selection exceeds this count. */
+const TABLE_SELECTION_WARN_THRESHOLD = 10;
+/** Documented sweet spot for discovery quality and runtime. */
+const TABLE_SELECTION_IDEAL_MAX = 25;
 const OPERATION_WIDGET_OPTIONS = ['Discover Use Cases', 'Generate Use Cases'];
 const GENERATION_OPTIONS = [
   { key: 'PDF Catalog', icon: FileText, desc: 'Professional PDF use case catalog' },
@@ -609,6 +613,45 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
   const effectiveDb = params['02_inspire_database'] || inspireDatabase;
   const canLaunch = params['00_business_name'] && effectiveDb && params['01_uc_metadata'];
 
+  /** Warn on many explicit tables, or when an entire schema/catalog is in scope. */
+  const tableSelectionWarning = useMemo(() => {
+    if (selectedTables.length > TABLE_SELECTION_WARN_THRESHOLD) {
+      return {
+        show: true,
+        summary: `${selectedTables.length} tables selected`,
+        tableCount: selectedTables.length,
+        scope: 'tables',
+      };
+    }
+    if (selectedSchemas.length > 0 && selectedTables.length === 0) {
+      const names = selectedSchemas.join(', ');
+      const n = selectedSchemas.length;
+      return {
+        show: true,
+        summary:
+          n === 1
+            ? `entire schema ${names} (all tables in that schema)`
+            : `${n} entire schemas (${names}) — all tables in each schema`,
+        tableCount: null,
+        scope: 'schemas',
+      };
+    }
+    if (selectedCatalogs.length > 0 && selectedSchemas.length === 0 && selectedTables.length === 0) {
+      const names = selectedCatalogs.join(', ');
+      const n = selectedCatalogs.length;
+      return {
+        show: true,
+        summary:
+          n === 1
+            ? `entire catalog ${names} (all schemas and tables)`
+            : `${n} entire catalogs (${names}) — all schemas and tables`,
+        tableCount: null,
+        scope: 'catalogs',
+      };
+    }
+    return { show: false };
+  }, [selectedTables, selectedSchemas, selectedCatalogs]);
+
   /** Shown in the page `<h1>` — updates after a short typing pause or immediately on blur (“finished writing”). */
   const [headlineBusiness, setHeadlineBusiness] = useState('');
   useEffect(() => {
@@ -927,6 +970,15 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
                       ))}
                     </div>
                   </div>
+                )}
+
+                {tableSelectionWarning.show && (
+                  <TableSelectionGuidanceWarning
+                    selectionSummary={tableSelectionWarning.summary}
+                    tableCount={tableSelectionWarning.tableCount}
+                    scope={tableSelectionWarning.scope}
+                    idealMax={TABLE_SELECTION_IDEAL_MAX}
+                  />
                 )}
 
                 {/* Collapsible picker toggle */}
@@ -1302,6 +1354,18 @@ export default function LaunchPage({ settings, update, onLaunched, onOpenResults
       {/* Launch Footer */}
       <div className="mt-8 pt-6 border-t border-border">
         {/* Summary chips */}
+        {tableSelectionWarning.show && (
+          <div className="mb-5">
+            <TableSelectionGuidanceWarning
+              selectionSummary={tableSelectionWarning.summary}
+              tableCount={tableSelectionWarning.tableCount}
+              scope={tableSelectionWarning.scope}
+              idealMax={TABLE_SELECTION_IDEAL_MAX}
+              compact
+            />
+          </div>
+        )}
+
         {canLaunch && (
           <div className="flex flex-wrap items-center gap-2 mb-5">
             <Chip icon={<Building2 size={10} />}>{params['00_business_name']}</Chip>
@@ -1470,5 +1534,64 @@ function Chip({ children, icon }) {
     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold border border-db-red/20 bg-db-red-50 text-db-red">
       {icon} {children}
     </span>
+  );
+}
+
+function TableSelectionGuidanceWarning({
+  selectionSummary,
+  tableCount,
+  scope = 'tables',
+  idealMax,
+  compact = false,
+}) {
+  const overIdeal = tableCount != null && tableCount >= idealMax;
+  const isBroadScope = scope === 'schemas' || scope === 'catalogs';
+
+  return (
+    <div
+      className={`rounded-lg border border-amber-500/35 bg-amber-500/5 ${compact ? 'p-3' : 'p-4 mb-3'}`}
+      role="status"
+    >
+      <div className="flex gap-2.5">
+        <AlertCircle size={compact ? 16 : 18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+        <div className="min-w-0 space-y-2 text-sm text-text-secondary leading-relaxed">
+          <p className="font-semibold text-amber-800 dark:text-amber-200">
+            {selectionSummary} — this run will likely take longer
+          </p>
+          {isBroadScope && (
+            <p className="text-xs text-amber-800/90 dark:text-amber-200/90">
+              You selected a {scope === 'catalogs' ? 'whole catalog' : 'whole schema'} without naming individual
+              tables. Inspire will scan everything in scope. For faster, higher-quality discovery, open the table
+              list and pick a focused set instead.
+            </p>
+          )}
+          <p>
+            For the best outcomes, select a <strong className="text-text-primary">small set of tables</strong>{' '}
+            (ideally fewer than {idealMax}) in <strong className="text-text-primary">one business domain</strong>{' '}
+            (for example, all sales-related tables).
+          </p>
+          <ul className="list-disc pl-4 space-y-1 text-xs sm:text-sm">
+            <li>
+              Prefer <strong className="text-text-primary">transactional</strong> tables that change often with new
+              data (for example <span className="font-mono text-[11px]">sales_transactions</span>).
+            </li>
+            <li>
+              Static reference tables add little value (for example{' '}
+              <span className="font-mono text-[11px]">store_location</span>).
+            </li>
+            <li>
+              If relationships are not visible in metadata (no primary/foreign keys), describe joins in{' '}
+              <strong className="text-text-primary">Generation Instructions</strong> below.
+            </li>
+          </ul>
+          {overIdeal && (
+            <p className="text-xs font-medium text-amber-700 dark:text-amber-300">
+              You are at or above {idealMax} tables — consider narrowing to transactional tables in a single domain
+              before launching.
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
