@@ -1652,7 +1652,10 @@ app.post('/api/setup/verify', async (req, res) => {
   res.json({ ok: allOk, checks });
 });
 
-// Create inspire database schema if it doesn't exist
+// Create inspire database schema if it doesn't exist.
+// In locked-down workspaces CREATE SCHEMA may not be permitted. In that case we fall back
+// to using a schema that was pre-created by a UC admin: if the schema already exists we
+// treat setup as successful instead of erroring.
 app.post('/api/setup/create-database', requireToken, async (req, res) => {
   try {
     const { inspire_database, warehouse_id } = req.body;
@@ -1661,10 +1664,37 @@ app.post('/api/setup/create-database', requireToken, async (req, res) => {
     if (parts.length !== 2) return res.status(400).json({ error: 'Format: catalog.schema' });
     const [catalog, schema] = parts;
 
-    // Create schema if not exists
-    const sql = `CREATE SCHEMA IF NOT EXISTS \`${catalog}\`.\`${schema}\``;
-    const result = await executeSql(req.dbHost, req.dbToken, warehouse_id, sql);
-    res.json({ ok: true, message: `Schema ${inspire_database} ready` });
+    // Existence check via UC REST — works without any CREATE privilege.
+    const schemaExists = async () => {
+      try {
+        const r = await dbFetch(req.dbHost, req.dbToken, `/api/2.1/unity-catalog/schemas/${encodeURIComponent(catalog)}.${encodeURIComponent(schema)}`);
+        return r.ok;
+      } catch (_e) {
+        return false;
+      }
+    };
+
+    // Already there? Use it as-is (the common case when an admin pre-created it).
+    if (await schemaExists()) {
+      return res.json({ ok: true, message: `Schema ${inspire_database} already exists — using it` });
+    }
+
+    // Try to create it; if CREATE SCHEMA is blocked, re-check existence before failing.
+    try {
+      const sql = `CREATE SCHEMA IF NOT EXISTS \`${catalog}\`.\`${schema}\``;
+      await executeSql(req.dbHost, req.dbToken, warehouse_id, sql);
+      return res.json({ ok: true, message: `Schema ${inspire_database} ready` });
+    } catch (createErr) {
+      if (await schemaExists()) {
+        return res.json({ ok: true, message: `Schema ${inspire_database} already exists — using it (CREATE not permitted)` });
+      }
+      return res.status(500).json({
+        ok: false,
+        error: `Schema ${inspire_database} does not exist and CREATE SCHEMA is not permitted. `
+          + `Ask a UC admin to run:  CREATE SCHEMA \`${catalog}\`.\`${schema}\`;  and grant the app `
+          + `service principal USE_SCHEMA, CREATE_TABLE, SELECT, MODIFY on it. Original error: ${createErr.message}`,
+      });
+    }
   } catch (err) {
     res.status(500).json({ ok: false, error: err.message });
   }

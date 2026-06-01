@@ -202,7 +202,12 @@ else:
         "Unity Catalog",
     )
 
-SCHEMA = "_inspire"
+# Use an existing schema when CREATE SCHEMA is not permitted in the target catalog.
+# Set SCHEMA_OVERRIDE to a schema that already exists under {CATALOG} — any name works;
+# the app stores its __inspire_* tracking tables inside whatever schema you point it at.
+# Leave as None to keep the default "_inspire".
+SCHEMA_OVERRIDE = None  # e.g. "inspire" or an existing schema name
+SCHEMA = (SCHEMA_OVERRIDE or "_inspire").strip()
 INSPIRE_DB = f"{CATALOG}.{SCHEMA}"
 APP_NAME = "inspire-ai"
 SP_NAME = f"{APP_NAME}-sp"
@@ -411,10 +416,47 @@ print("  Clean ✅")
 
 # COMMAND ----------
 
-# Schema
+# Schema — prefer an existing schema. If CREATE SCHEMA is not permitted in this catalog,
+# fall back to verifying that `{CATALOG}`.`{SCHEMA}` already exists (pre-created by a UC
+# admin) and continue. Only hard-fail when the schema is genuinely missing.
 if WAREHOUSE_ID:
-    stmt = w.statement_execution.execute_statement(warehouse_id=WAREHOUSE_ID, statement=f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.`{SCHEMA}`", wait_timeout="30s")
-    print(f"Schema: {'✅' if stmt.status and stmt.status.state == StatementState.SUCCEEDED else '⚠️ ' + str(stmt.status)}")
+    def _schema_exists():
+        try:
+            chk = w.statement_execution.execute_statement(
+                warehouse_id=WAREHOUSE_ID,
+                statement=f"SHOW SCHEMAS IN `{CATALOG}`",
+                wait_timeout="30s",
+            )
+            rows = (chk.result.data_array if chk.result else None) or []
+            return SCHEMA in {(r[0] or "").strip() for r in rows if r}
+        except Exception as e:
+            print(f"  Could not list schemas in {CATALOG}: {str(e)[:120]}")
+            return False
+
+    created = False
+    try:
+        stmt = w.statement_execution.execute_statement(
+            warehouse_id=WAREHOUSE_ID,
+            statement=f"CREATE SCHEMA IF NOT EXISTS `{CATALOG}`.`{SCHEMA}`",
+            wait_timeout="30s",
+        )
+        created = bool(stmt.status and stmt.status.state == StatementState.SUCCEEDED)
+        if not created:
+            print(f"  CREATE SCHEMA not successful: {stmt.status}")
+    except Exception as e:
+        print(f"  CREATE SCHEMA blocked ({str(e)[:120]}) — checking for an existing schema...")
+
+    if created:
+        print(f"Schema: ✅ {CATALOG}.{SCHEMA}")
+    elif _schema_exists():
+        print(f"Schema: ✅ using existing {CATALOG}.{SCHEMA} (no CREATE SCHEMA needed)")
+    else:
+        raise RuntimeError(
+            f"Schema `{CATALOG}`.`{SCHEMA}` does not exist and CREATE SCHEMA is not permitted. "
+            f"Ask a UC admin to run:  CREATE SCHEMA `{CATALOG}`.`{SCHEMA}`;  and grant the app "
+            f"service principal USE_SCHEMA, CREATE_TABLE, SELECT, MODIFY on it — or set "
+            f"SCHEMA_OVERRIDE above to a schema that already exists."
+        )
 
 # Notebook — ALWAYS publish to /Shared/ so the SP can access it.
 # The SP can't read from user folders — only /Shared/ is accessible.
@@ -617,7 +659,8 @@ if NEW_SP_APP_ID and WAREHOUSE_ID:
     grants = [
         f"GRANT USE_CATALOG ON CATALOG `{CATALOG}` TO `{sp}`",
         f"GRANT BROWSE ON CATALOG `{CATALOG}` TO `{sp}`",
-        f"GRANT CREATE SCHEMA ON CATALOG `{CATALOG}` TO `{sp}`",
+        # CREATE SCHEMA intentionally NOT granted — the schema already exists and the
+        # service principal only needs table-level rights inside it (below).
         f"GRANT USE_SCHEMA ON SCHEMA `{CATALOG}`.`{SCHEMA}` TO `{sp}`",
         f"GRANT CREATE_TABLE ON SCHEMA `{CATALOG}`.`{SCHEMA}` TO `{sp}`",
         f"GRANT SELECT ON SCHEMA `{CATALOG}`.`{SCHEMA}` TO `{sp}`",
