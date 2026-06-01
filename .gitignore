@@ -1,6 +1,11 @@
 # Dependencies
 node_modules/
 
+# Vendored backend deps — committed so the Databricks Apps runtime needs no npm
+# registry access at startup (start.sh skips `npm ci` when backend/node_modules exists).
+!backend/node_modules/
+!backend/node_modules/**
+
 # Environment variables
 .env
 .env.local
