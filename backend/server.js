@@ -417,6 +417,16 @@ function getToken(req) {
     ? (forwarded.startsWith('Bearer ') ? forwarded.slice(7).trim() : forwarded.trim())
     : '';
 
+  // Opt-in (INSPIRE_PREFER_USER_TOKEN=true): act on behalf of the signed-in user using the
+  // forwarded user token, so the app uses the USER's Unity Catalog permissions instead of the
+  // app service principal's. Use this when the app SP cannot be granted catalog/schema rights.
+  // Requires the app to have User Authorization enabled with the `sql` scope, and the user to
+  // have rights on the target schema. Note: delegated user tokens expire, so very long-running
+  // background SQL may need a re-open of the app; fine for interactive Discover/Results.
+  if (process.env.INSPIRE_PREFER_USER_TOKEN === 'true' && forwardedClean) {
+    return forwardedClean;
+  }
+
   // 3–5) Databricks App (production + SP): prefer static / SP token over x-forwarded-access-token.
   // Delegated user tokens expire; Inspire Results/SQL should keep working on the app service principal.
   const spBackedApp = process.env.NODE_ENV === 'production' && SP_CLIENT_ID && SP_CLIENT_SECRET;
